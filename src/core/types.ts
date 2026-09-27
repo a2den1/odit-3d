@@ -71,7 +71,8 @@ export interface SceneObject {
   mat?: Material
   light?: LightProps
   camera?: CameraProps
-  model?: { path: string }
+  /** node: one top-level node of a scene brought in from Blender, used as-is */
+  model?: { path: string; node?: number }
   shadow: boolean
   anim: Tracks
 }

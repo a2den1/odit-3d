@@ -189,7 +189,7 @@ export default function Timeline({ height }: { height: number }) {
   }
 
   /* ---------------------------------------------------- keyframes */
-  const animated = p.objects.filter((o) => Object.keys(o.anim).length > 0 || ui.selection.includes(o.id))
+  const animated = p.objects
   const isSel = (s: KeySel) => ui.selKeys.some((k) => k.obj === s.obj && k.key === s.key && Math.abs(k.t - s.t) <= KEY_EPS)
 
   const keyDown = (e: React.PointerEvent, group: KeySel[]) => {
@@ -326,12 +326,13 @@ export default function Timeline({ height }: { height: number }) {
           )}
           {animated.map((o) => {
             const open = ui.expanded['tl:' + o.id]
-            const props = PROPS.filter((d) => o.anim[d.key]?.length)
+            // every property the object has, keyed or not, so a row is there to key it
+            const props = PROPS.filter((d) => d.get(o) !== undefined)
             return (
               <React.Fragment key={o.id}>
                 <div className={'tl-row krow' + (ui.selection.includes(o.id) ? ' sel' : '')} style={{ height: KROW + 4 }}>
                   <div className="tl-head obj" onClick={() => store.select([o.id])}>
-                    <button className="ol-twist" disabled={!props.length}
+                    <button className="ol-twist"
                       onClick={(e) => { e.stopPropagation(); store.setUi({ expanded: { ...ui.expanded, ['tl:' + o.id]: !open } }) }}>
                       <i className={'fa-solid ' + (open ? 'fa-caret-down' : 'fa-caret-right')} />
                     </button>
@@ -343,9 +344,15 @@ export default function Timeline({ height }: { height: number }) {
                 </div>
                 {open && props.map((d) => (
                   <div key={d.key} className="tl-row krow sub" style={{ height: KROW }}>
-                    <div className="tl-head sub"><span>{d.label}</span></div>
+                    <div className="tl-head sub">
+                      <span>{d.label}</span>
+                      <button className={'tl-key' + (o.anim[d.key]?.some((k) => Math.abs(k.t - time) <= KEY_EPS) ? ' at' : o.anim[d.key]?.length ? ' on' : '')}
+                        title="재생 헤드에 키프레임" onClick={(e) => { e.stopPropagation(); store.toggleKey(o.id, [d.key]) }}>
+                        <i className="fa-solid fa-diamond" />
+                      </button>
+                    </div>
                     <div className="tl-lane" onPointerDown={(e) => { if (e.button === 0) { store.setUi({ selKeys: [] }); scrub(e) } }}>
-                      {o.anim[d.key].map((k) => diamond(k.t, [{ obj: o.id, key: d.key, t: k.t }], d.key + k.t))}
+                      {(o.anim[d.key] ?? []).map((k) => diamond(k.t, [{ obj: o.id, key: d.key, t: k.t }], d.key + k.t))}
                     </div>
                   </div>
                 ))}

@@ -14,6 +14,7 @@ import { editDelete, editExtrude, editMerge, editSubdivide, setEditMode, toggleE
 import { faceGroups, nearestTri, vcount, vget } from '../engine/editmesh'
 import { openAddMenu } from './addMenu'
 import { viewportApi } from './vpApi'
+import { getPrefs, subscribePrefs } from '../core/settings'
 
 const R2D = 180 / Math.PI
 const D2R = Math.PI / 180
@@ -52,13 +53,24 @@ export default function Viewport() {
 
   useEffect(() => {
     const cv = canvas.current!
-    const engine = new SceneEngine(cv, { pixelRatio: Math.min(devicePixelRatio, 2) })
+    const ratio = () => {
+      const q = getPrefs().quality
+      return q === 'low' ? 0.7 : q === 'normal' ? 1 : Math.min(devicePixelRatio, 2)
+    }
+    const engine = new SceneEngine(cv, { pixelRatio: ratio() })
     viewportApi.engine = engine
     const controls = new OrbitControls(engine.editorCam, cv)
     controls.target.set(0, 0.5, 0)
     controls.enableDamping = false
-    controls.zoomSpeed = 1.2
-    controls.mouseButtons = { LEFT: null as any, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN }
+    const applyPrefs = () => {
+      const p = getPrefs()
+      const orbit = p.orbitButton === 'middle' ? { MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN } : { MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE }
+      controls.mouseButtons = { LEFT: null as any, ...orbit }
+      // OrbitControls has no inverted-zoom switch; a negative speed flips it
+      controls.zoomSpeed = p.invertZoom ? -1.2 : 1.2
+      if (engine.renderer.getPixelRatio() !== ratio()) { engine.renderer.setPixelRatio(ratio()); fit() }
+      needs = true
+    }
     controls.update()
 
     const tc = new TransformControls(engine.editorCam, cv)
@@ -133,6 +145,8 @@ export default function Viewport() {
     }
     const ro = new ResizeObserver(fit)
     ro.observe(wrap.current!)
+    applyPrefs()
+    const offPrefs = subscribePrefs(applyPrefs)
     let lastCam = store.ui.camView
     let lastAspect = 0
 
@@ -309,8 +323,10 @@ export default function Viewport() {
       return new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1)
     }
     const onDown = (e: PointerEvent) => {
-      if (e.button === 0 && e.altKey) {
-        // Alt + left drag orbits, for mice without a usable middle button
+      // Alt + left drag orbits, for mice without a usable middle button; so does any
+      // left drag on empty space when that is switched on (object mode only)
+      const emptyLeft = getPrefs().leftOrbit && !store.ui.edit && !(tc as any).axis && e.button === 0
+      if (e.button === 0 && (e.altKey || (emptyLeft && !engine.pick(ndc(e))))) {
         controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE
       } else controls.mouseButtons.LEFT = null as any
       downAt = { x: e.clientX, y: e.clientY, b: e.button }
@@ -443,7 +459,7 @@ export default function Viewport() {
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
-      offA(); offB()
+      offA(); offB(); offPrefs()
       audio.stop()
       cv.removeEventListener('pointerdown', onDown, true)
       cv.removeEventListener('pointerup', onUp)
@@ -694,6 +710,11 @@ export default function Viewport() {
         <button className="btn ghost icon sm" title="끝으로 (End)" onClick={() => store.setTime(s.duration)}><i className="fa-solid fa-forward-step" /></button>
         <div className="tc"><span className="cur">{timecode(time, s.fps)}</span><span className="dur"> / {timecode(s.duration, s.fps)}</span></div>
         <div className="spacer" />
+        {!ui.preview && (
+          <button className="btn ghost sm" title="프리뷰 패널 열기" onClick={() => store.setUi({ preview: true })}>
+            <i className="fa-solid fa-display" />프리뷰
+          </button>
+        )}
         <button className={'btn sm' + (camView ? ' on' : ' ghost')} title="카메라 시점 (Numpad 0)" onClick={() => store.setUi({ camView: !camView })}>
           <i className="fa-solid fa-video" />카메라 시점
         </button>

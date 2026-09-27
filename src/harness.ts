@@ -9,6 +9,9 @@ import { viewportApi } from './ui/vpApi'
 import { Exporter, FrameRenderer } from './engine/exporter'
 import { ensureFont } from './engine/geometry'
 import type { Project } from './core/types'
+import * as THREE from 'three'
+import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { projectFromBlend } from './engine/blendImport'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -195,6 +198,36 @@ export async function run({ shots }: { shots: boolean }) {
     await wait(100)
     check('Tab leaves edit mode', !store.ui.edit)
 
+    // separate preview panel
+    store.setUi({ preview: true })
+    await wait(800)
+    const pvc = document.querySelector('.preview-panel canvas') as HTMLCanvasElement | null
+    check('preview panel renders the output', !!pvc && lum(pvc).sd > 4, pvc ? `sd ${lum(pvc).sd.toFixed(1)}` : 'missing')
+    store.setTime(1.2)
+    await wait(400)
+    if (shots) await window.odit.harness.shot('08-preview')
+
+    // timeline: an object with no keys still expands to its property rows
+    const ball = store.project.objects.find((o) => o.name === '공')!
+    store.setUi({ expanded: { ['tl:' + ball.id]: true } })
+    await wait(150)
+    check('timeline expands an unkeyed object', document.querySelectorAll('.tl-row.krow.sub').length >= 9)
+    store.setTime(0.5)
+    ;(document.querySelector('.tl-row.krow.sub .tl-key') as HTMLButtonElement).click()
+    await wait(80)
+    check('row key button keys the property', (store.obj(ball.id)!.anim['pos.x']?.length ?? 0) === 1)
+
+    // settings
+    store.setUi({ settings: true })
+    await wait(300)
+    check('settings open', !!document.querySelector('.modal.settings'))
+    if (shots) await window.odit.harness.shot('09-settings')
+    store.setUi({ settings: false })
+
+    // a Blender-style glTF (mesh with keys, camera under a correction node, sun) becomes a project
+    const blendOk = await blendCheck(check)
+    if (blendOk && shots) { await wait(1500); await window.odit.harness.shot('10-blend') }
+
     // offline frame + export
     const fr = new FrameRenderer(320, 180)
     await fr.prepare(store.project)
@@ -213,4 +246,59 @@ export async function run({ shots }: { shots: boolean }) {
     ok = false
   }
   await window.odit.harness.result(ok, lines)
+}
+
+async function blendCheck(check: (n: string, c: boolean, x?: string) => void): Promise<boolean> {
+  const sc = new THREE.Scene()
+  const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xff7a1a }))
+  cube.name = 'Cube'
+  cube.position.set(0, 1, 0)
+  sc.add(cube)
+  const holder = new THREE.Object3D()
+  holder.name = 'Camera'
+  holder.position.set(5, 3, 6)
+  // Object3D.lookAt aims +Z; a camera looks down -Z, so aim the holder away from the cube
+  holder.lookAt(10, 5, 12)
+  const cam = new THREE.PerspectiveCamera(35, 16 / 9, 0.1, 100)
+  cam.name = 'Camera_Orientation'
+  holder.add(cam)
+  sc.add(holder)
+  const sun = new THREE.DirectionalLight(0xffffff, 3)
+  sun.name = 'Sun'
+  sun.position.set(3, 6, 2)
+  sc.add(sun)
+  // frames 1..48 at 24 fps, as Blender writes them
+  const times = [1 / 24, 1, 2]
+  const clip = new THREE.AnimationClip('CubeAction', -1, [
+    new THREE.VectorKeyframeTrack('Cube.position', times, [0, 1, 0, 0, 2.5, 0, 0, 1, 0]),
+    new THREE.QuaternionKeyframeTrack('Cube.quaternion', times, [
+      ...new THREE.Quaternion().toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI * 0.9, 0)).toArray(),
+      ...new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI * 1.8, 0)).toArray(),
+    ]),
+  ])
+  const glbBuf = await new GLTFExporter().parseAsync(sc, { binary: true, animations: [clip] }) as ArrayBuffer
+  const info = await window.odit.app.info()
+  const glb = info.temp + '\\odit3d-blend-test.glb'
+  await window.odit.fs.writeBinary(glb, glbBuf)
+  const p = await projectFromBlend(glb, {
+    fps: 24, start: 1, end: 48, w: 1280, h: 720, camera: 'Camera', world: [0.05, 0.05, 0.06], version: 'test', objects: [],
+  }, 'blend-test')
+  const model = p.objects.find((o) => o.kind === 'model')
+  const camObj = p.objects.find((o) => o.kind === 'camera')
+  const light = p.objects.find((o) => o.kind === 'light')
+  check('blend: mesh becomes its own object', !!model && model.name === 'Cube' && model.model?.node !== undefined)
+  check('blend: position keys, shifted to frame 1 = 0s', (model?.anim['pos.y']?.length ?? 0) === 3 && model!.anim['pos.y'][0].t === 0,
+    JSON.stringify(model?.anim['pos.y']?.map((k) => [k.t, k.v])))
+  const ry = model?.anim['rot.y']?.map((k) => k.v) ?? []
+  check('blend: rotation keeps turning past 180°', ry.length === 3 && ry[2] > 300, JSON.stringify(ry.map((v) => Math.round(v))))
+  check('blend: camera under its correction node + shot', !!camObj && !!camObj.parentId && p.clips.some((c) => c.kind === 'shot' && c.cameraId === camObj.id))
+  check('blend: sun light', light?.light?.kind === 'sun')
+  check('blend: render settings', p.settings.fps === 24 && p.settings.duration === 2 && p.settings.width === 1280)
+  store.load(p, null)
+  store.setUi({ preview: true })
+  await wait(1500)
+  const n = viewportApi.engine?.nodes.get(model!.id)
+  check('blend: model node loads in the scene', !!n?.model)
+  return true
 }

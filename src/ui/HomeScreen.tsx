@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import type { ProjectCard } from '../../electron/preload'
 import { ago, shortTime } from '../core/util'
-import { openProject, startNew } from './actions'
+import { openProject, startFromBlend, startNew } from './actions'
 import { ask } from './widgets'
 import { store } from '../core/store'
 import Logo from './Logo'
@@ -27,11 +27,16 @@ export default function HomeScreen() {
     <div className="app home-app">
       <div className="titlebar">
         <div className="brand"><Logo size={18} /><b>ODIT 3D</b></div>
+        <div className="spacer" />
+        <button className="btn ghost icon sm" title="설정" onClick={() => store.setUi({ settings: true })}><i className="fa-solid fa-gear" /></button>
       </div>
       <div className="home">
         <div className="home-actions">
           <button className="act act-main" onClick={startNew}>
             <span className="act-icon"><i className="fa-solid fa-plus" /></span><b>새 프로젝트</b>
+          </button>
+          <button className="act" onClick={() => startFromBlend()}>
+            <span className="act-icon blend"><i className="fa-solid fa-cube" /></span><b>블렌더 파일에서 시작</b>
           </button>
           <button className="act" onClick={() => openProject()}>
             <span className="act-icon"><i className="fa-solid fa-folder-open" /></span><b>파일 열기</b>

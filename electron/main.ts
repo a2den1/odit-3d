@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, dialog, protocol, shell, Menu } from 'electron'
-import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, execFile, ChildProcessWithoutNullStreams } from 'node:child_process'
 import { promises as fs, createReadStream } from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
@@ -140,16 +140,18 @@ const MODEL_EXT = ['glb', 'gltf', 'obj', 'fbx', 'stl']
 const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg']
 const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp']
 
-ipcMain.handle('dialog:open', async (_e, kind: 'model' | 'audio' | 'image' | 'project') => {
+ipcMain.handle('dialog:open', async (_e, kind: 'model' | 'audio' | 'image' | 'project' | 'blend' | 'exe') => {
   if (!win) return []
   const filters = {
     model: [{ name: '3D 모델', extensions: MODEL_EXT }],
     audio: [{ name: '오디오', extensions: AUDIO_EXT }],
     image: [{ name: '이미지', extensions: IMAGE_EXT }],
     project: [{ name: 'ODIT 3D 프로젝트', extensions: ['odit3d'] }],
+    blend: [{ name: '블렌더 파일', extensions: ['blend'] }],
+    exe: [{ name: 'blender.exe', extensions: ['exe'] }],
   }[kind]
   const r = await dialog.showOpenDialog(win, {
-    properties: kind === 'project' ? ['openFile'] : ['openFile', 'multiSelections'],
+    properties: kind === 'model' || kind === 'audio' || kind === 'image' ? ['openFile', 'multiSelections'] : ['openFile'],
     defaultPath: kind === 'project' ? projectsDir() : undefined,
     filters,
   })
@@ -292,6 +294,126 @@ ipcMain.handle('export:cancel', async (_e, id: string) => {
   await fs.unlink(s.out).catch(() => {})
   return true
 })
+
+/* ------------------------------------------------------------------ blender */
+
+const exists = (p: string) => fs.access(p).then(() => true, () => false)
+
+async function newestIn(dir: string, rel: string): Promise<string | null> {
+  try {
+    const names = (await fs.readdir(dir)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+    for (const n of names) { const p = path.join(dir, n, rel); if (await exists(p)) return p }
+  } catch {}
+  return null
+}
+
+function sh(bin: string, args: string[]): Promise<string> {
+  return new Promise((res) => execFile(bin, args, { windowsHide: true }, (_e, out) => res(String(out ?? ''))))
+}
+
+/** Every place Blender tends to live on Windows: installer, Steam, the .blend file association, PATH. */
+async function findBlender(hint?: string): Promise<string | null> {
+  if (hint && await exists(hint)) return hint
+  const pf = [process.env['ProgramFiles'], process.env['ProgramFiles(x86)'], 'C:\\Program Files'].filter(Boolean) as string[]
+  for (const root of pf) {
+    const p = await newestIn(path.join(root, 'Blender Foundation'), 'blender.exe')
+    if (p) return p
+  }
+  const steamRoots = new Set<string>([path.join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Steam')])
+  try {
+    const vdf = await fs.readFile(path.join([...steamRoots][0], 'steamapps', 'libraryfolders.vdf'), 'utf8')
+    for (const m of vdf.matchAll(/"path"\s+"([^"]+)"/g)) steamRoots.add(m[1].replace(/\\\\/g, '\\'))
+  } catch {}
+  for (const d of ['C', 'D', 'E', 'F']) steamRoots.add(`${d}:\\SteamLibrary`)
+  for (const root of steamRoots) {
+    const p = path.join(root, 'steamapps', 'common', 'Blender', 'blender.exe')
+    if (await exists(p)) return p
+  }
+  const reg = await sh('reg', ['query', 'HKCR\\blendfile\\shell\\open\\command', '/ve'])
+  const m = /"([^"]*blender[^"]*\.exe)"/i.exec(reg)
+  if (m) {
+    const p = m[1].replace(/blender-launcher\.exe$/i, 'blender.exe')
+    if (await exists(p)) return p
+  }
+  const where = (await sh('where', ['blender'])).split(/\r?\n/).find((l) => l.trim().endsWith('.exe'))
+  if (where && await exists(where.trim())) return where.trim()
+  return null
+}
+
+ipcMain.handle('blender:find', (_e, hint?: string) => findBlender(hint))
+
+/** Have Blender itself write the scene out as glTF plus a little JSON of render settings. */
+ipcMain.handle('blender:convert', async (_e, blend: string, hint?: string) => {
+  const exe = await findBlender(hint)
+  if (!exe) return { ok: false, error: 'no-blender' }
+  const stem = path.basename(blend).replace(/\.blend$/i, '').replace(/[\\/:*?"<>|]/g, '_')
+  const dir = path.join(projectsDir(), 'assets', `${stem}-${Date.now().toString(36)}`)
+  await ensureDir(dir)
+  const glb = path.join(dir, 'scene.glb')
+  const json = path.join(dir, 'scene.json')
+  const script = path.join(os.tmpdir(), `odit3d-blend-${process.pid}.py`)
+  await fs.writeFile(script, BLEND_SCRIPT, 'utf8')
+  const log: string[] = []
+  const code = await new Promise<number>((res) => {
+    const p = spawn(exe, ['--factory-startup', '-b', blend, '--python-exit-code', '3', '--python', script, '--', glb, json], { windowsHide: true })
+    p.stdout.on('data', (d) => { log.push(String(d)); if (log.length > 80) log.shift() })
+    p.stderr.on('data', (d) => { log.push(String(d)); if (log.length > 80) log.shift() })
+    p.on('error', () => res(-1))
+    p.on('close', (c) => res(c ?? -1))
+  })
+  await fs.unlink(script).catch(() => {})
+  if (code !== 0 || !(await exists(glb))) return { ok: false, error: log.slice(-12).join('').trim() || `blender ${code}` }
+  const info = JSON.parse(await fs.readFile(json, 'utf8'))
+  return { ok: true, glb, info, blender: exe }
+})
+
+const BLEND_SCRIPT = String.raw`
+import bpy, json, sys, traceback
+argv = sys.argv[sys.argv.index("--") + 1:]
+glb, out_json = argv[0], argv[1]
+sc = bpy.context.scene
+r = sc.render
+info = {
+    "fps": r.fps / (r.fps_base or 1),
+    "start": sc.frame_start, "end": sc.frame_end,
+    "w": int(r.resolution_x * r.resolution_percentage / 100),
+    "h": int(r.resolution_y * r.resolution_percentage / 100),
+    "camera": sc.camera.name if sc.camera else None,
+    "world": None,
+    "version": bpy.app.version_string,
+    "objects": [{"name": o.name, "type": o.type} for o in sc.objects],
+}
+try:
+    w = sc.world
+    col = None
+    if w and w.use_nodes:
+        for n in w.node_tree.nodes:
+            if n.type == "BACKGROUND":
+                c = n.inputs[0].default_value
+                col = [c[0], c[1], c[2]]
+                break
+    if col is None and w:
+        col = list(w.color)
+    info["world"] = col
+except Exception:
+    pass
+kw = dict(filepath=glb, export_format="GLB", export_cameras=True, export_lights=True, export_apply=True,
+          export_animations=True, export_yup=True, export_force_sampling=False,
+          export_import_convert_lighting_mode="COMPAT")
+done = False
+for drop in ([], ["export_import_convert_lighting_mode"], ["export_import_convert_lighting_mode", "export_force_sampling"],
+             ["export_import_convert_lighting_mode", "export_force_sampling", "export_lights"]):
+    try:
+        bpy.ops.export_scene.gltf(**{k: v for k, v in kw.items() if k not in drop})
+        done = True
+        break
+    except TypeError:
+        continue
+if not done:
+    bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB")
+with open(out_json, "w", encoding="utf-8") as f:
+    json.dump(info, f)
+`
 
 /* ------------------------------------------------------------------ harness */
 

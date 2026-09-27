@@ -17,6 +17,12 @@ function b64url(str: string): string {
   return out
 }
 
+export interface BlendInfo {
+  fps: number; start: number; end: number; w: number; h: number
+  camera: string | null; world: [number, number, number] | null; version: string
+  objects: { name: string; type: string }[]
+}
+
 export interface ProjectCard { path: string; name: string; mtime: number; thumb: string | null; duration: number }
 
 const api = {
@@ -32,7 +38,7 @@ const api = {
     },
   },
   dialog: {
-    open: (kind: 'model' | 'audio' | 'image' | 'project') => ipcRenderer.invoke('dialog:open', kind) as Promise<string[]>,
+    open: (kind: 'model' | 'audio' | 'image' | 'project' | 'blend' | 'exe') => ipcRenderer.invoke('dialog:open', kind) as Promise<string[]>,
     save: (name: string, ext: string) => ipcRenderer.invoke('dialog:save', name, ext) as Promise<string | null>,
   },
   fs: {
@@ -56,6 +62,11 @@ const api = {
     frame: (id: string, d: ArrayBuffer) => ipcRenderer.invoke('export:frame', id, d) as Promise<boolean>,
     end: (id: string) => ipcRenderer.invoke('export:end', id) as Promise<{ ok: boolean; size?: number; path?: string; error?: string }>,
     cancel: (id: string) => ipcRenderer.invoke('export:cancel', id) as Promise<boolean>,
+  },
+  blender: {
+    find: (hint?: string) => ipcRenderer.invoke('blender:find', hint) as Promise<string | null>,
+    convert: (blend: string, hint?: string) => ipcRenderer.invoke('blender:convert', blend, hint) as Promise<
+      { ok: true; glb: string; info: BlendInfo; blender: string } | { ok: false; error: string }>,
   },
   harness: {
     shot: (name: string) => ipcRenderer.invoke('harness:shot', name) as Promise<string | null>,

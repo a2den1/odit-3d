@@ -15,6 +15,8 @@ import { ask } from './widgets'
 import { buildGeometry } from '../engine/geometry'
 import { fromGeometry, extrude, merge, remove as removeMesh, subdivide } from '../engine/editmesh'
 import type { EditSelMode } from '../core/store'
+import { getPrefs } from '../core/settings'
+import { projectFromBlend } from '../engine/blendImport'
 
 const R2D = 180 / Math.PI
 
@@ -304,4 +306,28 @@ export function editSubdivide() {
   if (!r) { store.toast('나눌 면을 선택해 주세요'); return }
   store.editMesh(() => r.mesh)
   store.setEditSel(r.sel)
+}
+
+/* ------------------------------------------------------------------ blender */
+
+/** Start a new project from a .blend: Blender writes it out, and the scene comes in object by object. */
+export async function startFromBlend(file?: string) {
+  const f = file ?? (await window.odit.dialog.open('blend'))[0]
+  if (!f) return
+  if (!(await leaveCurrent())) return
+  store.setUi({ blend: { phase: 'working', file: f } })
+  const r = await window.odit.blender.convert(f, getPrefs().blenderPath || undefined)
+  if (!r.ok) {
+    store.setUi({ blend: r.error === 'no-blender' ? { phase: 'noblender', file: f } : { phase: 'error', file: f, error: r.error } })
+    return
+  }
+  try {
+    const p = await projectFromBlend(r.glb, r.info, stripExt(f))
+    store.load(p, null)
+    store.setUi({ blend: null })
+    const models = p.objects.filter((o) => o.kind === 'model').length
+    store.toast(`블렌더 장면을 가져왔어요 · 오브젝트 ${models}개`)
+  } catch (e: any) {
+    store.setUi({ blend: { phase: 'error', file: f, error: String(e?.message ?? e) } })
+  }
 }

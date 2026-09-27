@@ -10,7 +10,7 @@ import type { Project, SceneObject } from '../core/types'
 import { valueAt, vecAt } from '../core/anim'
 import { easeAt } from '../core/easing'
 import { buildGeometry, primSignature, onFontReady } from './geometry'
-import { loadModel, instanceOf } from './models'
+import { loadModel, instanceOf, loadRaw, instanceNode } from './models'
 import { fxAt, shotAt, type FxState } from './timeline'
 import { selectedTris, visibleEdges } from './editmesh'
 
@@ -255,20 +255,25 @@ export class SceneEngine {
     }
 
     if (o.kind === 'model' && o.model) {
-      const sig = o.model.path
+      const node = o.model.node
+      const sig = o.model.path + (node !== undefined ? '#' + node : '')
       if (n.sig !== sig) {
         n.sig = sig
         if (n.model) { g.remove(n.model); n.model = undefined }
         n.mixer = undefined
-        const pr = loadModel(sig).then((m) => {
+        const path = o.model.path
+        const pr = (node !== undefined ? loadRaw(path) : loadModel(path)).then((m) => {
           if (n.sig !== sig || !this.nodes.has(n.id)) return
-          const inst = instanceOf(m)
+          let inst: THREE.Object3D
+          let clip: THREE.AnimationClip | null = m.clips[0] ?? null
+          if (node !== undefined) ({ obj: inst, clip } = instanceNode(m, node))
+          else inst = instanceOf(m)
           inst.traverse((x) => { x.userData.objId = o.id })
           n.model = inst
           g.add(inst)
-          if (m.clips.length) {
+          if (clip) {
             n.mixer = new THREE.AnimationMixer(inst)
-            n.mixer.clipAction(m.clips[0]).play()
+            n.mixer.clipAction(clip).play()
           }
           this.onAsync?.()
         }).catch((e) => { console.error('[model]', sig, e) })

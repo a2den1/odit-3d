@@ -8,10 +8,13 @@ import Outliner from './Outliner'
 import Inspector from './Inspector'
 import Timeline from './Timeline'
 import ExportDialog from './ExportDialog'
+import SettingsDialog from './SettingsDialog'
+import PreviewPanel from './PreviewPanel'
+import { getPrefs, loadPrefs, usePrefs } from '../core/settings'
 import Logo from './Logo'
 import { AskHost, MenuHost, ask } from './widgets'
 import {
-  editDelete, editExtrude, editMerge, editSelectAll, goHome, importAudio, importModels, leaveCurrent, save, setEditMode, toggleEdit,
+  editDelete, editExtrude, editMerge, editSelectAll, goHome, importAudio, importModels, leaveCurrent, save, setEditMode, startFromBlend, toggleEdit,
 } from './actions'
 import { openAddMenu } from './addMenu'
 import { viewportApi } from './vpApi'
@@ -26,6 +29,8 @@ export default function App() {
   const [tlH, setTlH] = useState(280)
   const [dropping, setDropping] = useState(false)
   const screen = store.ui.screen
+  const prefs = usePrefs()
+  useEffect(() => { loadPrefs() }, [])
 
   /* ------------------------------------------------ keys */
   useEffect(() => {
@@ -113,9 +118,13 @@ export default function App() {
       if (await leaveCurrent()) window.odit.app.close()
     })
     // saved projects keep themselves saved; a new one waits for its first Ctrl S
+    let lastSave = Date.now()
     const iv = setInterval(() => {
-      if (store.ui.screen === 'editor' && store.dirty && store.path && !store.playing) save().catch(() => {})
-    }, 60_000)
+      const p = getPrefs()
+      if (!p.autosave || Date.now() - lastSave < p.autosaveMin * 60_000) return
+      lastSave = Date.now()
+      if (store.ui.screen === 'editor' && store.dirty && store.path && !store.playing && !store.ui.edit) save().catch(() => {})
+    }, 15_000)
     return () => { off(); clearInterval(iv) }
   }, [])
 
@@ -127,6 +136,8 @@ export default function App() {
     if (!paths.length) return
     const proj = paths.find((p) => extname(p) === 'odit3d')
     if (proj) { const { openProject } = await import('./actions'); return openProject(proj) }
+    const blend = paths.find((p) => extname(p) === 'blend')
+    if (blend) return startFromBlend(blend)
     if (store.ui.screen !== 'editor') return
     const models = paths.filter((p) => MODEL.includes(extname(p)))
     const audio = paths.filter((p) => AUDIO.includes(extname(p)))
@@ -173,6 +184,10 @@ export default function App() {
             <button className="btn ghost icon sm" title="되돌리기 (Ctrl Z)" disabled={!store.canUndo} onClick={() => store.doUndo()}><i className="fa-solid fa-rotate-left" /></button>
             <button className="btn ghost icon sm" title="다시 실행 (Ctrl Y)" disabled={!store.canRedo} onClick={() => store.doRedo()}><i className="fa-solid fa-rotate-right" /></button>
             <div className="spacer" />
+            <button className={'btn sm' + (store.ui.preview ? ' on' : ' ghost')} title="프리뷰 패널" onClick={() => store.setUi({ preview: !store.ui.preview })}>
+              <i className="fa-solid fa-display" />프리뷰
+            </button>
+            <button className="btn ghost icon sm" title="설정" onClick={() => store.setUi({ settings: true })}><i className="fa-solid fa-gear" /></button>
             <button className="btn ghost sm" title="저장 (Ctrl S)" onClick={() => save().then((ok) => ok && store.toast('저장했어요'))}>
               <i className="fa-solid fa-floppy-disk" />저장
             </button>
@@ -182,7 +197,31 @@ export default function App() {
           </div>
           <div className="main">
             <LeftPanel />
-            <Viewport />
+            <div className={'center' + (prefs.previewDock === 'bottom' ? ' bottom' : '')}>
+              <Viewport />
+              {store.ui.preview && <>
+                <div className="pv-split" onPointerDown={(e) => {
+                  e.preventDefault()
+                  const bottom = prefs.previewDock === 'bottom'
+                  const x0 = e.clientX, y0 = e.clientY
+                  const { w, h } = store.previewSize
+                  document.body.classList.add(bottom ? 'resizing-v' : 'resizing-h')
+                  const move = (ev: PointerEvent) => {
+                    if (bottom) store.previewSize = { w, h: Math.max(160, Math.min(innerHeight - 380, h - (ev.clientY - y0))) }
+                    else store.previewSize = { h, w: Math.max(240, Math.min(innerWidth - 1000, w - (ev.clientX - x0))) }
+                    store.emit()
+                  }
+                  const up = () => {
+                    document.body.classList.remove('resizing-v', 'resizing-h')
+                    window.removeEventListener('pointermove', move)
+                    window.removeEventListener('pointerup', up)
+                  }
+                  window.addEventListener('pointermove', move)
+                  window.addEventListener('pointerup', up)
+                }} />
+                <PreviewPanel />
+              </>}
+            </div>
             <div className="right-col">
               <div className="panel outliner-panel">
                 <div className="panel-head"><span className="panel-title">장면</span><div className="spacer" />
@@ -197,6 +236,8 @@ export default function App() {
         </div>
       )}
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
+      {store.ui.settings && <SettingsDialog onClose={() => store.setUi({ settings: false })} />}
+      {store.ui.blend && <BlendDialog />}
       {dropping && (
         <div className="drop-overlay"><div><i className="fa-solid fa-file-import" /><b>여기에 놓기</b><span>3D 모델 · 오디오 · 이미지 · 프로젝트</span></div></div>
       )}
@@ -208,3 +249,27 @@ export default function App() {
 }
 
 export { ask }
+
+function BlendDialog() {
+  const b = store.ui.blend!
+  const close = () => store.setUi({ blend: null })
+  return (
+    <div className="modal-backdrop" onKeyDown={(e) => e.stopPropagation()}>
+      <div className="modal small">
+        <div className="modal-head"><h2>{b.phase === 'working' ? '블렌더 장면 가져오는 중' : b.phase === 'noblender' ? '블렌더를 찾지 못했어요' : '가져오지 못했어요'}</h2></div>
+        <div className="modal-body">
+          {b.phase === 'working' && <div className="blend-prog"><div className="progress"><div /></div><span>{b.file.split(/[\\/]/).pop()}</span></div>}
+          {b.phase === 'noblender' && <p className="ask-body">이 PC에 설치된 블렌더가 필요해요. 설정에서 blender.exe 위치를 지정해 주세요.</p>}
+          {b.phase === 'error' && <div className="err-body">{b.error}</div>}
+        </div>
+        {b.phase !== 'working' && (
+          <div className="modal-foot">
+            {b.phase === 'noblender' && <button className="btn" onClick={() => store.setUi({ blend: null, settings: true })}>설정 열기</button>}
+            <div className="spacer" />
+            <button className="btn primary" onClick={close}>닫기</button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

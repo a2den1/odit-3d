@@ -33,6 +33,11 @@ interface Ui {
   expanded: Record<string, boolean>
   toast: { id: number; text: string } | null
   edit: EditState | null
+  /** the separate output preview panel */
+  preview: boolean
+  settings: boolean
+  /** bringing in a .blend: Blender is converting it, or it failed */
+  blend: { phase: 'working' | 'error' | 'noblender'; file: string; error?: string } | null
 }
 
 const MAX_UNDO = 150
@@ -43,7 +48,7 @@ class Store {
   dirty = false
   ui: Ui = {
     screen: 'home', selection: [], selClip: null, selKeys: [], gizmo: 'translate', shading: 'render',
-    camView: false, autoKey: false, leftTab: 'add', rightTab: 'object', pxPerSec: 90, expanded: {}, toast: null, edit: null,
+    camView: false, autoKey: false, leftTab: 'add', rightTab: 'object', pxPerSec: 90, expanded: {}, toast: null, edit: null, preview: false, settings: false, blend: null,
   }
 
   /* ------------------------------------------------------------ time */
@@ -58,6 +63,9 @@ class Store {
   private gesture = 0
   private coalesceKey: string | null = null
   private coalesceAt = 0
+
+  /** preview panel size (px) — dragged with the splitter, not worth an undo step */
+  previewSize = { w: 520, h: 300 }
 
   /** set by the viewport so saving can store a picture of the scene */
   thumbnailer: (() => string | null) | null = null

@@ -89,3 +89,46 @@ export function loadModel(p: string): Promise<LoadedModel> {
 export function instanceOf(m: LoadedModel): THREE.Object3D {
   return skeletonClone(m.scene)
 }
+
+/* ---------------------------------------------------------- blender scenes */
+
+const rawCache = new Map<string, Promise<LoadedModel>>()
+
+/** A whole glTF scene exactly as authored — no re-centering or rescaling — for scenes brought in from Blender. */
+export function loadRaw(p: string): Promise<LoadedModel> {
+  let pr = rawCache.get(p)
+  if (!pr) {
+    pr = gltfLoader().loadAsync(urlOf(p)).then((g) => {
+      g.scene.traverse((n) => {
+        const m = n as THREE.Mesh
+        if (m.isMesh) { m.castShadow = true; m.receiveShadow = true }
+      })
+      return { scene: g.scene, clips: g.animations }
+    })
+    rawCache.set(p, pr)
+    pr.catch(() => rawCache.delete(p))
+  }
+  return pr
+}
+
+/**
+ * One top-level node of a raw scene as its own object. The node's own
+ * transform is left to the ODIT object (and its keyframes), so it is reset
+ * here; animation inside the node (bones, children) comes back as a clip.
+ */
+export function instanceNode(m: LoadedModel, index: number): { obj: THREE.Object3D; clip: THREE.AnimationClip | null } {
+  const src = m.scene.children[index]
+  if (!src) return { obj: new THREE.Group(), clip: null }
+  const obj = skeletonClone(src)
+  obj.position.set(0, 0, 0)
+  obj.quaternion.identity()
+  obj.scale.set(1, 1, 1)
+  const inside = new Set<string>()
+  src.traverse((n) => { if (n !== src) inside.add(n.name) })
+  const tracks: THREE.KeyframeTrack[] = []
+  for (const c of m.clips) for (const t of c.tracks) {
+    const target = t.name.slice(0, t.name.lastIndexOf('.'))
+    if (inside.has(target)) tracks.push(t)
+  }
+  return { obj, clip: tracks.length ? new THREE.AnimationClip('inner', -1, tracks) : null }
+}

@@ -1,5 +1,6 @@
 import { easeAt, type EasingKind } from './easing'
 import type { Keyframe, SceneObject, Vec3 } from './types'
+import { getPrefs } from './settings'
 
 export const KEY_EPS = 1 / 240
 
@@ -18,7 +19,7 @@ export function evalKeys(keys: Keyframe[] | undefined, t: number, fallback: numb
   return last.v
 }
 
-export function setKey(keys: Keyframe[] | undefined, t: number, v: number, e: EasingKind = 'smooth'): Keyframe[] {
+export function setKey(keys: Keyframe[] | undefined, t: number, v: number, e: EasingKind = getPrefs().defaultEase): Keyframe[] {
   const list = (keys ?? []).filter((k) => Math.abs(k.t - t) > KEY_EPS)
   const prev = keys?.find((k) => Math.abs(k.t - t) <= KEY_EPS)
   list.push({ t, v, e: prev?.e ?? e })
