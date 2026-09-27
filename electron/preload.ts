@@ -68,6 +68,19 @@ const api = {
     convert: (blend: string, hint?: string) => ipcRenderer.invoke('blender:convert', blend, hint) as Promise<
       { ok: true; glb: string; info: BlendInfo; blender: string } | { ok: false; error: string }>,
   },
+  update: {
+    status: () => ipcRenderer.invoke('update:status') as Promise<import('./updater').UpdateStatus>,
+    loadable: () => ipcRenderer.invoke('update:loadable') as Promise<boolean>,
+    setPrefs: (p: Partial<import('./updater').UpdatePrefs>) => ipcRenderer.invoke('update:setPrefs', p) as Promise<import('./updater').UpdateStatus>,
+    check: () => ipcRenderer.invoke('update:check') as Promise<import('./updater').UpdateStatus>,
+    download: () => ipcRenderer.invoke('update:download') as Promise<import('./updater').UpdateStatus>,
+    install: () => ipcRenderer.invoke('update:install') as Promise<boolean>,
+    onStatus: (fn: (s: import('./updater').UpdateStatus) => void) => {
+      const h = (_e: unknown, s: import('./updater').UpdateStatus) => fn(s)
+      ipcRenderer.on('update:status', h)
+      return () => { ipcRenderer.off('update:status', h) }
+    },
+  },
   harness: {
     shot: (name: string) => ipcRenderer.invoke('harness:shot', name) as Promise<string | null>,
     result: (ok: boolean, lines: string[]) => ipcRenderer.invoke('harness:result', ok, lines),

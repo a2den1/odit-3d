@@ -5,6 +5,7 @@ import { openProject, startFromBlend, startNew } from './actions'
 import { ask } from './widgets'
 import { store } from '../core/store'
 import Logo from './Logo'
+import { UpdateBadge } from './update'
 
 export default function HomeScreen() {
   const [list, setList] = useState<ProjectCard[] | null>(null)
@@ -28,6 +29,7 @@ export default function HomeScreen() {
       <div className="titlebar">
         <div className="brand"><Logo size={18} /><b>ODIT 3D</b></div>
         <div className="spacer" />
+        <UpdateBadge />
         <button className="btn ghost icon sm" title="설정" onClick={() => store.setUi({ settings: true })}><i className="fa-solid fa-gear" /></button>
       </div>
       <div className="home">

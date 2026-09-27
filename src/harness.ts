@@ -228,6 +228,8 @@ export async function run({ shots }: { shots: boolean }) {
     const blendOk = await blendCheck(check)
     if (blendOk && shots) { await wait(1500); await window.odit.harness.shot('10-blend') }
 
+    check('updater loads', await window.odit.update.loadable())
+
     // offline frame + export
     const fr = new FrameRenderer(320, 180)
     await fr.prepare(store.project)

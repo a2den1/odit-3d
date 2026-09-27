@@ -10,6 +10,7 @@ import Timeline from './Timeline'
 import ExportDialog from './ExportDialog'
 import SettingsDialog from './SettingsDialog'
 import PreviewPanel from './PreviewPanel'
+import { UpdateBadge } from './update'
 import { getPrefs, loadPrefs, usePrefs } from '../core/settings'
 import Logo from './Logo'
 import { AskHost, MenuHost, ask } from './widgets'
@@ -184,6 +185,7 @@ export default function App() {
             <button className="btn ghost icon sm" title="되돌리기 (Ctrl Z)" disabled={!store.canUndo} onClick={() => store.doUndo()}><i className="fa-solid fa-rotate-left" /></button>
             <button className="btn ghost icon sm" title="다시 실행 (Ctrl Y)" disabled={!store.canRedo} onClick={() => store.doRedo()}><i className="fa-solid fa-rotate-right" /></button>
             <div className="spacer" />
+            <UpdateBadge />
             <button className={'btn sm' + (store.ui.preview ? ' on' : ' ghost')} title="프리뷰 패널" onClick={() => store.setUi({ preview: !store.ui.preview })}>
               <i className="fa-solid fa-display" />프리뷰
             </button>

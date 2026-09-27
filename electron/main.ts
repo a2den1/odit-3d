@@ -5,6 +5,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { Readable } from 'node:stream'
+import { initUpdater, registerUpdaterIpc } from './updater'
 
 const MIME: Record<string, string> = {
   glb: 'model/gltf-binary', gltf: 'model/gltf+json', obj: 'text/plain', mtl: 'text/plain',
@@ -112,6 +113,10 @@ app.whenReady().then(() => {
     }
   })
   createWindow()
+  registerUpdaterIpc()
+  const probeArg = argv.find((a) => a.startsWith('--update-probe'))
+  initUpdater(() => win, { offline: harness, probe: probeArg ? (probeArg.split('=')[1] ?? 'current') : undefined })
+    .catch((e) => console.error('[updater]', e))
 })
 
 app.on('window-all-closed', () => app.quit())

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { usePrefs, setPrefs, DEFAULT_PREFS } from '../core/settings'
 import { EASINGS } from '../core/easing'
 import { Select, Switch } from './widgets'
+import { useUpdate, UPDATE_LABEL } from './update'
+import { store } from '../core/store'
 
 const KEYS: [string, string][] = [
   ['Shift A', '추가 메뉴'], ['G  R  S', '이동 · 회전 · 크기 (뒤에 X Y Z로 축 고정)'], ['Tab', '편집 모드'],
@@ -15,6 +17,8 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
   const p = usePrefs()
   const [found, setFound] = useState<string | null | undefined>(undefined)
   const [version, setVersion] = useState('')
+  const up = useUpdate()
+  const us = up.status
   useEffect(() => {
     window.odit.blender.find(p.blenderPath).then(setFound)
     window.odit.app.info().then((i) => setVersion(i.version))
@@ -65,6 +69,26 @@ export default function SettingsDialog({ onClose }: { onClose: () => void }) {
               <Select value={p.defaultEase} onChange={(v) => setPrefs({ defaultEase: v })}
                 options={EASINGS.filter((e) => e.id !== 'custom').map((e) => ({ v: e.id, label: e.name }))} />
             </div>
+          </div>
+
+          <div className="set-sec">
+            <h3>업데이트</h3>
+            <div className="set-row">
+              <span>{UPDATE_LABEL(us)}</span>
+              {us.state === 'ready' ? (
+                <button className="btn sm primary" onClick={() => up.install()}>재시작해서 설치</button>
+              ) : us.state === 'available' ? (
+                <button className="btn sm primary" onClick={() => window.odit.update.download()}>내려받기</button>
+              ) : (
+                <button className="btn sm" disabled={us.state === 'disabled' || us.state === 'checking' || us.state === 'downloading'} onClick={() => up.check()}>
+                  <i className="fa-solid fa-rotate" />확인
+                </button>
+              )}
+            </div>
+            {us.state === 'downloading' && <div className="progress"><div style={{ width: `${Math.round(us.percent ?? 0)}%` }} /></div>}
+            {us.state === 'error' && <div className="err-body">{us.error}</div>}
+            <div className="set-row"><span>켤 때 새 버전 확인</span><Switch on={us.prefs.autoCheck} onChange={(v) => up.setPrefs({ autoCheck: v })} /></div>
+            <div className="set-row"><span>새 버전 알아서 내려받기</span><Switch on={us.prefs.autoDownload} onChange={(v) => up.setPrefs({ autoDownload: v })} /></div>
           </div>
 
           <div className="set-sec">

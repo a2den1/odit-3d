@@ -10,7 +10,7 @@ const common = {
   target: 'node20',
   format: 'cjs',
   sourcemap: true,
-  external: ['electron', 'ffmpeg-static'],
+  external: ['electron', 'ffmpeg-static', 'electron-updater'],
   logLevel: 'info',
 }
 const entries = [
