@@ -64,7 +64,13 @@ export async function run({ shots }: { shots: boolean }) {
     if (shots) await window.odit.harness.shot('01-home')
     await ensureFont()
     store.load(demo(), null)
-    await wait(2200)
+    // a fresh profile compiles every shader on the first frame, which can take seconds
+    for (let i = 0; i < 60; i++) {
+      await wait(250)
+      const c = document.querySelector('.vp-canvas') as HTMLCanvasElement | null
+      if (c && lum(c).sd > 4 && viewportApi.engine?.nodes.size) break
+    }
+    await wait(300)
     check('editor mounted', !!document.querySelector('.viewport canvas'))
     check('engine alive', !!viewportApi.engine)
     const vc = document.querySelector('.vp-canvas') as HTMLCanvasElement
