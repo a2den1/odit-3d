@@ -1,0 +1,210 @@
+/**
+ * --selftest / --shots: drives the real app, checks that the scene actually
+ * renders, that editing works end to end, and that export writes a file.
+ */
+import { store } from './core/store'
+import { newProject, makeMesh, makeLight, makeCamera, makeShot, makeTitle, makeFx } from './core/defaults'
+import { applyMaterial, applyMotion, setEditMode, toggleEdit } from './ui/actions'
+import { viewportApi } from './ui/vpApi'
+import { Exporter, FrameRenderer } from './engine/exporter'
+import { ensureFont } from './engine/geometry'
+import type { Project } from './core/types'
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+function demo(): Project {
+  const p = newProject('데모')
+  const cube = p.objects[1]
+  const ball = makeMesh('sphere', [-1.8, 0.6, 0.6]); ball.name = '공'
+  ball.mat!.color = '#ff5a5f'; ball.mat!.roughness = 0.25
+  const knot = makeMesh('knot', [1.9, 0.9, -0.4]); knot.name = '매듭'
+  knot.mat!.color = '#f5c451'; knot.mat!.metalness = 1; knot.mat!.roughness = 0.2
+  const text = makeMesh('text', [0, 0, -2.2]); text.prim!.text = '오딧 3D'
+  text.mat!.color = '#ffffff'
+  const spot = makeLight('point', [-2, 2.5, 2])
+  spot.light!.color = '#7cc4ff'
+  const cam2 = makeCamera([0, 1.2, 4]); cam2.name = '정면 카메라'; cam2.camera!.target = cube.id
+  p.objects.push(ball, knot, text, spot, cam2)
+  cube.anim['rot.y'] = [{ t: 0, v: 0, e: 'cubicInOut' }, { t: 4, v: 180, e: 'cubicInOut' }]
+  cube.anim['pos.y'] = [{ t: 0, v: 0.5, e: 'quadOut' }, { t: 1, v: 1.4, e: 'quadIn' }, { t: 2, v: 0.5, e: 'linear' }]
+  p.clips = [makeShot(p.objects[3].id, 0, 4), { ...makeShot(cam2.id, 4, 4), trans: 'blend', transDur: 1 }]
+  const title = makeTitle(0.5); title.text = 'ODIT 3D'; title.size = 110; title.y = 0.2; title.anim = 'rise'
+  p.clips.push(title, makeFx('vignette', 0))
+  p.clips[p.clips.length - 1].dur = 8
+  return p
+}
+
+function lum(c: HTMLCanvasElement) {
+  const x = document.createElement('canvas')
+  x.width = 64; x.height = 36
+  const g = x.getContext('2d')!
+  g.drawImage(c, 0, 0, 64, 36)
+  const d = g.getImageData(0, 0, 64, 36).data
+  let s = 0, var2 = 0
+  for (let i = 0; i < d.length; i += 4) s += (d[i] + d[i + 1] + d[i + 2]) / 3
+  const mean = s / (d.length / 4)
+  for (let i = 0; i < d.length; i += 4) var2 += ((d[i] + d[i + 1] + d[i + 2]) / 3 - mean) ** 2
+  return { mean, sd: Math.sqrt(var2 / (d.length / 4)) }
+}
+
+export async function run({ shots }: { shots: boolean }) {
+  const lines: string[] = []
+  let ok = true
+  const check = (name: string, cond: boolean, extra = '') => {
+    lines.push(`${cond ? 'ok  ' : 'FAIL'} ${name}${extra ? ' — ' + extra : ''}`)
+    if (!cond) ok = false
+  }
+  window.addEventListener('error', (e) => {
+    // synthetic pointer events have no live pointer to capture; that is the harness, not the app
+    if (/PointerCapture/.test(e.message)) return
+    lines.push('ERROR ' + e.message); ok = false
+  })
+  try {
+    await wait(600)
+    if (shots) await window.odit.harness.shot('01-home')
+    await ensureFont()
+    store.load(demo(), null)
+    await wait(2200)
+    check('editor mounted', !!document.querySelector('.viewport canvas'))
+    check('engine alive', !!viewportApi.engine)
+    const vc = document.querySelector('.vp-canvas') as HTMLCanvasElement
+    const L = lum(vc)
+    check('viewport renders something', L.sd > 4, `mean ${L.mean.toFixed(1)} sd ${L.sd.toFixed(1)}`)
+    const textNode = viewportApi.engine!.nodes.get(store.project.objects.find((o) => o.prim?.kind === 'text')!.id)
+    check('3D text has geometry', (textNode?.mesh?.geometry.getAttribute('position')?.count ?? 0) > 100)
+
+    // edit: select, material, motion, undo
+    const cube = store.project.objects[1]
+    store.select([cube.id])
+    applyMaterial('chrome')
+    check('material preset applies', store.obj(cube.id)!.mat!.metalness === 1)
+    store.setTime(2)
+    applyMotion('spin')
+    check('motion writes keys', (store.obj(cube.id)!.anim['rot.y']?.length ?? 0) >= 3)
+    store.doUndo()
+    check('undo reverts motion', store.obj(cube.id)!.anim['rot.y'].length === 2)
+    store.setTime(0)
+    await wait(300)
+    if (shots) await window.odit.harness.shot('02-editor')
+
+    store.setUi({ camView: true })
+    store.setTime(1.2)
+    await wait(600)
+    const L2 = lum(vc)
+    check('camera view renders', L2.sd > 4, `sd ${L2.sd.toFixed(1)}`)
+    if (shots) await window.odit.harness.shot('03-camview')
+    store.setTime(4.5)
+    await wait(400)
+    if (shots) await window.odit.harness.shot('04-blend')
+    store.setUi({ camView: false, shading: 'solid' })
+    await wait(300)
+    if (shots) await window.odit.harness.shot('05-solid')
+    store.setUi({ shading: 'render' })
+
+    // interaction: modal grab with the mouse, like G in Blender
+    store.setUi({ camView: false })
+    store.setTime(3)
+    await wait(200)
+    const r0 = vc.getBoundingClientRect()
+    const cx = r0.left + r0.width / 2, cy = r0.top + r0.height / 2
+    const vp = document.querySelector('.viewport')!
+    vp.dispatchEvent(new PointerEvent('pointermove', { clientX: cx, clientY: cy, bubbles: true }))
+    const before = store.obj(cube.id)!.pos.slice()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'g', code: 'KeyG', bubbles: true }))
+    await wait(100)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', code: 'KeyX', bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: cx + 120, clientY: cy, bubbles: true }))
+    await wait(100)
+    window.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx + 120, clientY: cy, button: 0, bubbles: true }))
+    await wait(100)
+    const after = store.obj(cube.id)!.pos
+    check('G + X moves along X only', Math.abs(after[0] - before[0]) > 0.1 && Math.abs(after[2] - before[2]) < 1e-6, `${before.map((v) => v.toFixed(3))} -> ${after.map((v) => v.toFixed(3))}`)
+
+    // timeline: drag the title clip right
+    const title = document.querySelector('.clip.k-title') as HTMLElement
+    const tr = title.getBoundingClientRect()
+    const s0 = store.project.clips.find((c) => c.kind === 'title')!.start
+    title.dispatchEvent(new PointerEvent('pointerdown', { clientX: tr.left + 30, clientY: tr.top + 5, button: 0, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: tr.left + 30 + 90, clientY: tr.top + 5, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: tr.left + 30 + 90, clientY: tr.top + 5, bubbles: true }))
+    await wait(100)
+    const s1 = store.project.clips.find((c) => c.kind === 'title')!.start
+    check('clip drag moves the clip', s1 > s0 + 0.5, `${s0} -> ${s1.toFixed(2)}`)
+
+    // split + add menu
+    const n0 = store.project.clips.length
+    store.selectClip(null)
+    store.setTime(2)
+    store.split()
+    check('split cuts clips under the playhead', store.project.clips.length > n0)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'A', code: 'KeyA', shiftKey: true, bubbles: true }))
+    await wait(100)
+    const menuEl = document.querySelector('.ctx-menu') as HTMLElement | null
+    check('Shift A opens the add menu', !!menuEl, menuEl ? JSON.stringify(menuEl.getBoundingClientRect()) + ' ' + getComputedStyle(menuEl).opacity : '')
+    await wait(300)
+    if (shots) await window.odit.harness.shot('06-addmenu')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await wait(100)
+
+    // mesh edit mode
+    store.setTime(0)
+    store.select([cube.id])
+    toggleEdit()
+    await wait(300)
+    const em = store.obj(cube.id)!.edit
+    check('Tab turns the cube into an editable mesh', !!em && !!store.ui.edit && !store.obj(cube.id)!.prim, em ? `${em.pos.length / 3} verts` : '')
+    const vcount0 = em!.pos.length / 3
+    // box-select over the whole viewport picks the visible vertices
+    const vr = vc.getBoundingClientRect()
+    vc.dispatchEvent(new PointerEvent('pointerdown', { clientX: vr.left + 5, clientY: vr.top + 5, button: 0, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: vr.right - 5, clientY: vr.bottom - 5, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: vr.right - 5, clientY: vr.bottom - 5, bubbles: true }))
+    vc.dispatchEvent(new PointerEvent('pointerup', { clientX: vr.right - 5, clientY: vr.bottom - 5, button: 0, bubbles: true }))
+    await wait(100)
+    const boxed = store.ui.edit!.sel.length
+    check('box select picks visible vertices only', boxed > 0 && boxed < vcount0, `${boxed} / ${vcount0}`)
+    // select the top face ring and extrude it upward with the mouse
+    const top = Math.max(...em!.pos.filter((_, i) => i % 3 === 1))
+    const topIds = Array.from({ length: vcount0 }, (_, i) => i).filter((i) => em!.pos[i * 3 + 1] > top - 1e-4)
+    setEditMode('face')
+    store.setEditSel(topIds)
+    vp.dispatchEvent(new PointerEvent('pointermove', { clientX: cx, clientY: cy, bubbles: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', code: 'KeyE', bubbles: true }))
+    await wait(150)
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: cx, clientY: cy - 120, bubbles: true }))
+    await wait(80)
+    window.dispatchEvent(new PointerEvent('pointerdown', { clientX: cx, clientY: cy - 120, button: 0, bubbles: true }))
+    await wait(150)
+    const ex = store.obj(cube.id)!.edit!
+    const top2 = Math.max(...ex.pos.filter((_, i) => i % 3 === 1))
+    check('E extrudes and pulls along the normal', ex.pos.length / 3 > vcount0 && top2 > top + 0.2, `${vcount0} -> ${ex.pos.length / 3} verts, top ${top.toFixed(2)} -> ${top2.toFixed(2)}`)
+    if (shots) await window.odit.harness.shot('07-edit')
+    const beforeMerge = ex.pos.length / 3
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', code: 'KeyM', bubbles: true }))
+    await wait(80)
+    check('M merges the selection', store.obj(cube.id)!.edit!.pos.length / 3 < beforeMerge)
+    store.doUndo()
+    check('undo restores the extruded mesh', store.obj(cube.id)!.edit!.pos.length / 3 === beforeMerge)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true }))
+    await wait(100)
+    check('Tab leaves edit mode', !store.ui.edit)
+
+    // offline frame + export
+    const fr = new FrameRenderer(320, 180)
+    await fr.prepare(store.project)
+    fr.draw(store.project, 1)
+    const L3 = lum(fr.out)
+    fr.dispose()
+    check('offline frame renders', L3.sd > 4, `sd ${L3.sd.toFixed(1)}`)
+
+    const info = await window.odit.app.info()
+    const out = info.temp + '\\odit3d-selftest.mp4'
+    const short = { ...store.project, settings: { ...store.project.settings, duration: 1.5 } }
+    const r = await new Exporter().run(short, { out, format: 'mp4', width: 640, height: 360, fps: 30, from: 0, to: 1.5, crf: 23, audio: false }, () => {})
+    check('mp4 export', r.ok && (r.size ?? 0) > 5000, r.ok ? `${r.size} bytes` : r.error)
+  } catch (e: any) {
+    lines.push('EXCEPTION ' + (e?.stack ?? e))
+    ok = false
+  }
+  await window.odit.harness.result(ok, lines)
+}
