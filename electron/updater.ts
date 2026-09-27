@@ -107,9 +107,9 @@ async function probe(u: AutoUpdater, pretend: string) {
   const out = (m: string) => console.log('[update-probe] ' + m)
   try {
     if (pretend !== 'current') {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const semver = require('semver')
-      ;(u as any).currentVersion = (semver.parse ?? semver.default.parse)(pretend)
+      // electron-updater ships its own semver; build the fake version with that same class
+      const cur = (u as any).currentVersion
+      ;(u as any).currentVersion = new cur.constructor(pretend)
     }
     u.autoDownload = true
     u.autoInstallOnAppQuit = false
@@ -122,7 +122,7 @@ async function probe(u: AutoUpdater, pretend: string) {
     out('feed says ' + (r?.updateInfo?.version ?? '?') + ' for ' + String((u as any).currentVersion))
     await done
   } catch (e) {
-    out('error ' + String((e as Error)?.message ?? e))
+    out('error ' + String((e as Error)?.stack ?? e))
   }
   app.exit(0)
 }
